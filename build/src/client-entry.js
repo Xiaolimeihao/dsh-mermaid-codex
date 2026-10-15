@@ -318,7 +318,9 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
           }
         };
 
-        // 导出用的干净 SVG：恢复自然尺寸（不受当前缩放影响）
+        // 导出用的干净 SVG：恢复自然尺寸（不受当前缩放影响）。
+        // 用 XMLSerializer 保证 XML 合规（HTML 的 outerHTML 会输出 &nbsp;、<br> 等
+        // 非 XML 形式，导致作为图片加载时解析失败）。
         const cleanSvgMarkup = (svgEl) => {
           const clone = svgEl.cloneNode(true);
           const vb = clone.viewBox && clone.viewBox.baseVal;
@@ -326,7 +328,11 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
           clone.style.cssText = w
             ? `width:${w}px;height:auto;display:block;`
             : "display:block;height:auto;";
-          return clone.outerHTML;
+          try {
+            return new XMLSerializer().serializeToString(clone);
+          } catch {
+            return clone.outerHTML;
+          }
         };
 
         const triggerDownload = (blob, filename) => {
@@ -340,44 +346,76 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
           window.setTimeout(() => URL.revokeObjectURL(url), 2000);
         };
 
+        // 失败时给出可见提示，不静默降级
+        const notify = (text) => {
+          const box = document.createElement("div");
+          box.textContent = text;
+          box.style.cssText =
+            "position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:10000;" +
+            "background:#1f2328;color:#ffffff;font-size:12.5px;padding:8px 14px;" +
+            "border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.25);";
+          document.body.appendChild(box);
+          window.setTimeout(() => box.remove(), 3200);
+        };
+
         const downloadSvg = (svgEl, hash) => {
           const markup = cleanSvgMarkup(svgEl);
           triggerDownload(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `mermaid-${hash}.svg`);
         };
 
-        // PNG 导出：SVG → 离屏 canvas 2x 栅格化；失败回退 SVG 下载
-        const downloadPng = (svgEl, hash) => {
+        // 三级加载：blob URL → data URL → createImageBitmap（逐步绕开 CSP/解析问题）
+        const loadSvgImage = (markup) => {
+          const svgBlob = new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
+          return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(svgBlob);
+            const img = new Image();
+            img.onload = () => {
+              URL.revokeObjectURL(url);
+              resolve(img);
+            };
+            img.onerror = () => {
+              URL.revokeObjectURL(url);
+              const img2 = new Image();
+              img2.onload = () => resolve(img2);
+              img2.onerror = () => {
+                if (typeof createImageBitmap === "function") {
+                  createImageBitmap(svgBlob).then(resolve, reject);
+                } else {
+                  reject(new Error("svg image load failed"));
+                }
+              };
+              img2.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(markup);
+            };
+            img.src = url;
+          });
+        };
+
+        // PNG 导出：SVG → 离屏 canvas 2x 栅格化；失败回退 SVG 并提示
+        const downloadPng = async (svgEl, hash) => {
           const markup = cleanSvgMarkup(svgEl);
-          const svgBlob = () => new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
-          const url = URL.createObjectURL(svgBlob());
-          const img = new Image();
-          img.onload = () => {
-            URL.revokeObjectURL(url);
-            try {
-              const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
-              const w = (vb && vb.width) || svgEl.clientWidth || 800;
-              const h = (vb && vb.height) || svgEl.clientHeight || 600;
-              const scale = 2;
-              const raster = document.createElement("canvas");
-              raster.width = Math.round(w * scale);
-              raster.height = Math.round(h * scale);
-              const ctx = raster.getContext("2d");
-              ctx.fillStyle = "#ffffff";
-              ctx.fillRect(0, 0, raster.width, raster.height);
-              ctx.drawImage(img, 0, 0, raster.width, raster.height);
-              raster.toBlob((png) => {
-                if (png) triggerDownload(png, `mermaid-${hash}.png`);
-                else triggerDownload(svgBlob(), `mermaid-${hash}.svg`);
-              }, "image/png");
-            } catch {
-              triggerDownload(svgBlob(), `mermaid-${hash}.svg`);
-            }
+          const svgFallback = () => {
+            triggerDownload(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `mermaid-${hash}.svg`);
+            notify("PNG 导出失败，已改为下载 SVG");
           };
-          img.onerror = () => {
-            URL.revokeObjectURL(url);
-            triggerDownload(svgBlob(), `mermaid-${hash}.svg`);
-          };
-          img.src = url;
+          try {
+            const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+            const w = (vb && vb.width) || svgEl.clientWidth || 800;
+            const h = (vb && vb.height) || svgEl.clientHeight || 600;
+            const source = await loadSvgImage(markup);
+            const scale = 2;
+            const raster = document.createElement("canvas");
+            raster.width = Math.round(w * scale);
+            raster.height = Math.round(h * scale);
+            const ctx = raster.getContext("2d");
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, raster.width, raster.height);
+            ctx.drawImage(source, 0, 0, raster.width, raster.height);
+            const png = await new Promise((resolve) => raster.toBlob(resolve, "image/png"));
+            if (!png) throw new Error("png encode failed");
+            triggerDownload(png, `mermaid-${hash}.png`);
+          } catch {
+            svgFallback();
+          }
         };
 
         const render = async (block, source, hash) => {
