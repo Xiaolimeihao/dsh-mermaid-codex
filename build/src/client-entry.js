@@ -6,7 +6,9 @@ import mermaid from "mermaid";
 
 const MODULE_ID = "dsh-mermaid-codex";
 
-mermaid.initialize({
+// 导出配置基线：PNG 导出时以 htmlLabels:false 重渲染纯 SVG 版本
+// （含 foreignObject 的 HTML 标签会污染 canvas，toBlob 抛 SecurityError）。
+const BASE_CONFIG = {
   startOnLoad: false,
   securityLevel: "loose",
   theme: "base",
@@ -17,7 +19,9 @@ mermaid.initialize({
     lineColor: "#9aa0a6",
     fontFamily: '"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif',
   },
-});
+};
+
+mermaid.initialize(BASE_CONFIG);
 
 // mermaid.detectType 的兜底正则（引擎缺失或异常时使用）
 const FALLBACK_TYPE =
@@ -40,7 +44,7 @@ function djb2(str) {
 }
 
 // DOM 结构版本：升级 UI 后递增，让旧渲染结果强制重画，避免新旧界面残留叠加
-const UI_VERSION = "6";
+const UI_VERSION = "7";
 
 const ICON_EXPAND = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>`;
 const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
@@ -65,6 +69,17 @@ window.__ModuleLoader__.load({
         let counter = 0;
         let chain = Promise.resolve();
         let scheduled = false;
+
+        // 所有 mermaid.render 串行排队；导出渲染与块渲染共用队列，
+        // 保证 htmlLabels 配置翻转不与其他渲染交错。
+        const enqueue = (fn) => {
+          const run = chain.then(fn, fn);
+          chain = run.then(
+            () => {},
+            () => {},
+          );
+          return run;
+        };
 
         const contentOf = (block) => block.querySelector(":scope > [data-code-block-content]");
         const sourceOf = (block) => {
@@ -390,18 +405,50 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
           });
         };
 
-        // PNG 导出：SVG → 离屏 canvas 2x 栅格化；失败回退 SVG 并提示
-        const downloadPng = async (svgEl, hash) => {
-          const markup = cleanSvgMarkup(svgEl);
+        // PNG 导出：以 htmlLabels:false 重渲染纯 SVG（无 foreignObject，不污染 canvas），
+        // XMLSerializer 序列化后 2x 栅格化。失败回退 SVG 下载并提示。
+        const downloadPng = async (svgEl, source, hash) => {
           const svgFallback = () => {
-            triggerDownload(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `mermaid-${hash}.svg`);
+            try {
+              const markup = cleanSvgMarkup(svgEl);
+              triggerDownload(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `mermaid-${hash}.svg`);
+            } catch {
+              /* ignore */
+            }
             notify("PNG 导出失败，已改为下载 SVG");
           };
           try {
-            const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
-            const w = (vb && vb.width) || svgEl.clientWidth || 800;
-            const h = (vb && vb.height) || svgEl.clientHeight || 600;
-            const source = await loadSvgImage(markup);
+            const pureMarkup = await enqueue(async () => {
+              const id = `mmdr-export-${++counter}`;
+              try {
+                mermaid.initialize({ ...BASE_CONFIG, htmlLabels: false });
+                const { svg } = await mermaid.render(id, source);
+                return svg;
+              } finally {
+                mermaid.initialize(BASE_CONFIG);
+                document.getElementById(`d${id}`)?.remove();
+                document.getElementById(id)?.remove();
+              }
+            });
+            // 取 viewBox 尺寸并固定 width/height 属性，保证图片有确定的固有尺寸
+            const wrap = document.createElement("div");
+            wrap.innerHTML = pureMarkup;
+            const el = wrap.querySelector("svg");
+            if (!el) throw new Error("no svg in export render");
+            const vb = el.viewBox && el.viewBox.baseVal;
+            const w = (vb && vb.width) || el.clientWidth || 800;
+            const h = (vb && vb.height) || el.clientHeight || 600;
+            el.setAttribute("width", String(Math.round(w)));
+            el.setAttribute("height", String(Math.round(h)));
+            const markup = (() => {
+              try {
+                return new XMLSerializer().serializeToString(el);
+              } catch {
+                return el.outerHTML;
+              }
+            })();
+
+            const source2 = await loadSvgImage(markup);
             const scale = 2;
             const raster = document.createElement("canvas");
             raster.width = Math.round(w * scale);
@@ -409,7 +456,7 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
             const ctx = raster.getContext("2d");
             ctx.fillStyle = "#ffffff";
             ctx.fillRect(0, 0, raster.width, raster.height);
-            ctx.drawImage(source, 0, 0, raster.width, raster.height);
+            ctx.drawImage(source2, 0, 0, raster.width, raster.height);
             const png = await new Promise((resolve) => raster.toBlob(resolve, "image/png"));
             if (!png) throw new Error("png encode failed");
             triggerDownload(png, `mermaid-${hash}.png`);
@@ -483,7 +530,7 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
             itemPng.addEventListener("click", () => {
               closeMenu(root);
               const el = canvas.querySelector("svg");
-              if (el) downloadPng(el, hash);
+              if (el) downloadPng(el, source, hash);
             });
             const itemDownload = menuItem("下载 SVG", ICON_DOWNLOAD);
             itemDownload.addEventListener("click", () => {
