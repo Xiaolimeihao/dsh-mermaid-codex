@@ -44,7 +44,7 @@ function djb2(str) {
 }
 
 // DOM 结构版本：升级 UI 后递增，让旧渲染结果强制重画，避免新旧界面残留叠加
-const UI_VERSION = "7";
+const UI_VERSION = "8";
 
 const ICON_EXPAND = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>`;
 const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
@@ -405,6 +405,26 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
           });
         };
 
+        // 统一的离屏渲染：fixed 容器不参与页面布局，避免 mermaid 临时测量
+        // 节点塞进 body 末尾引起滚动/布局抖动。plain=true 时用纯 SVG 文本标签。
+        const renderToMarkup = async (source, plain) => {
+          const id = `mmdr-${++counter}`;
+          const host = document.createElement("div");
+          host.style.cssText =
+            "position:fixed;left:-100000px;top:0;overflow:hidden;opacity:0;pointer-events:none;";
+          document.body.appendChild(host);
+          try {
+            if (plain) mermaid.initialize({ ...BASE_CONFIG, htmlLabels: false });
+            const { svg } = await mermaid.render(id, source, host);
+            return svg;
+          } finally {
+            if (plain) mermaid.initialize(BASE_CONFIG);
+            host.remove();
+            document.getElementById(`d${id}`)?.remove();
+            document.getElementById(id)?.remove();
+          }
+        };
+
         // PNG 导出：以 htmlLabels:false 重渲染纯 SVG（无 foreignObject，不污染 canvas），
         // XMLSerializer 序列化后 2x 栅格化。失败回退 SVG 下载并提示。
         const downloadPng = async (svgEl, source, hash) => {
@@ -418,18 +438,7 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
             notify("PNG 导出失败，已改为下载 SVG");
           };
           try {
-            const pureMarkup = await enqueue(async () => {
-              const id = `mmdr-export-${++counter}`;
-              try {
-                mermaid.initialize({ ...BASE_CONFIG, htmlLabels: false });
-                const { svg } = await mermaid.render(id, source);
-                return svg;
-              } finally {
-                mermaid.initialize(BASE_CONFIG);
-                document.getElementById(`d${id}`)?.remove();
-                document.getElementById(id)?.remove();
-              }
-            });
+            const pureMarkup = await enqueue(() => renderToMarkup(source, true));
             // 取 viewBox 尺寸并固定 width/height 属性，保证图片有确定的固有尺寸
             const wrap = document.createElement("div");
             wrap.innerHTML = pureMarkup;
@@ -466,9 +475,8 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
         };
 
         const render = async (block, source, hash) => {
-          const id = `mmdr-${++counter}`;
           try {
-            const { svg } = await mermaid.render(id, source);
+            const svg = await renderToMarkup(source, false);
             // 异步期间宿主可能重绘（流式更新），渲染前后一致性检查
             if (!block.isConnected) return;
             const content = contentOf(block);
@@ -583,8 +591,6 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
             block.dataset.mmdrV = UI_VERSION;
           } catch (err) {
             // 语法错误等情况保留原代码块展示，不吞掉内容
-            document.getElementById(`d${id}`)?.remove();
-            document.getElementById(id)?.remove();
             block.dataset.mmdrState = "error";
             block.dataset.mmdrHash = hash;
             block.dataset.mmdrV = UI_VERSION;
