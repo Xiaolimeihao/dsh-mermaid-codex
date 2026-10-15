@@ -10,7 +10,7 @@ import mermaid from "mermaid";
 
 const MODULE_ID = "dsh-mermaid-codex";
 // DOM 结构版本：结构变化后递增，旧块强制用新 UI 重画
-const UI_VERSION = "10";
+const UI_VERSION = "11";
 
 /* ------------------------------------------------------------------ */
 /* i18n                                                                */
@@ -587,7 +587,8 @@ window.__ModuleLoader__.load({
           const inner = document.createElement("div");
           inner.style.cssText =
             `background:${pal.card};border-radius:16px;padding:26px;position:relative;cursor:grab;` +
-            `max-width:92vw;max-height:92vh;overflow:auto;box-shadow:${pal.shadowLg};`;
+            // 底部预留工具条空隙：工具条在卡片外的遮罩层上，永不遮挡图
+            "max-width:92vw;max-height:calc(92vh - 84px);overflow:auto;box-shadow:" + pal.shadowLg + ";";
           const stage = document.createElement("div");
           stage.style.cssText = "width:max-content;max-width:100%;margin:0 auto;";
           stage.innerHTML = svgEl.outerHTML;
@@ -607,7 +608,7 @@ window.__ModuleLoader__.load({
           zoomLabel.textContent = "100%";
           const toolbar = document.createElement("div");
           toolbar.style.cssText =
-            "position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:2;" +
+            "position:absolute;left:50%;bottom:22px;transform:translateX(-50%);z-index:2;" +
             `display:flex;align-items:center;gap:3px;padding:5px 8px;border-radius:999px;` +
             `background:${pal.card};border:1px solid ${pal.border};box-shadow:${pal.shadowMd};`;
           const btnOut = iconButton(T.zoomOut, ICON_MINUS, 28, true);
@@ -626,7 +627,7 @@ window.__ModuleLoader__.load({
           toolbar.appendChild(btnFit);
           toolbar.appendChild(tsep());
           toolbar.appendChild(btnPng);
-          inner.appendChild(toolbar);
+          overlay.appendChild(toolbar); // 挂在遮罩层，不遮挡卡片内容
 
           const naturalW = (svg && svg.viewBox && svg.viewBox.baseVal.width) || (svg && svg.clientWidth) || 0;
           const zoomApi = attachZoom(inner, stage, naturalW, false, (z) => {
