@@ -44,7 +44,7 @@ function djb2(str) {
 }
 
 // DOM 结构版本：升级 UI 后递增，让旧渲染结果强制重画，避免新旧界面残留叠加
-const UI_VERSION = "8";
+const UI_VERSION = "9";
 
 const ICON_EXPAND = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>`;
 const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
@@ -425,8 +425,55 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
           }
         };
 
-        // PNG 导出：以 htmlLabels:false 重渲染纯 SVG（无 foreignObject，不污染 canvas），
-        // XMLSerializer 序列化后 2x 栅格化。失败回退 SVG 下载并提示。
+        // 导出结果缓存：打开 ⋯ 菜单时预生成 PNG，点击下载基本零等待
+        const exportCache = new Map();
+
+        const buildPngBlob = async (source, hash) => {
+          const pureMarkup = await enqueue(() => renderToMarkup(source, true));
+          // 取 viewBox 尺寸并固定 width/height 属性，保证图片有确定的固有尺寸
+          const wrap = document.createElement("div");
+          wrap.innerHTML = pureMarkup;
+          const el = wrap.querySelector("svg");
+          if (!el) throw new Error("no svg in export render");
+          const vb = el.viewBox && el.viewBox.baseVal;
+          const w = (vb && vb.width) || el.clientWidth || 800;
+          const h = (vb && vb.height) || el.clientHeight || 600;
+          el.setAttribute("width", String(Math.round(w)));
+          el.setAttribute("height", String(Math.round(h)));
+          const markup = (() => {
+            try {
+              return new XMLSerializer().serializeToString(el);
+            } catch {
+              return el.outerHTML;
+            }
+          })();
+          const image = await loadSvgImage(markup);
+          const scale = 2;
+          const raster = document.createElement("canvas");
+          raster.width = Math.round(w * scale);
+          raster.height = Math.round(h * scale);
+          const ctx = raster.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, raster.width, raster.height);
+          ctx.drawImage(image, 0, 0, raster.width, raster.height);
+          const png = await new Promise((resolve) => raster.toBlob(resolve, "image/png"));
+          if (!png) throw new Error("png encode failed");
+          return png;
+        };
+
+        const prefetchExport = (source, hash) => {
+          if (exportCache.has(hash)) return;
+          if (exportCache.size > 32) exportCache.clear();
+          exportCache.set(
+            hash,
+            buildPngBlob(source, hash).catch((err) => {
+              exportCache.delete(hash);
+              throw err;
+            }),
+          );
+        };
+
+        // PNG 导出：优先用预生成缓存；失败回退 SVG 下载并提示。
         const downloadPng = async (svgEl, source, hash) => {
           const svgFallback = () => {
             try {
@@ -438,36 +485,8 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
             notify("PNG 导出失败，已改为下载 SVG");
           };
           try {
-            const pureMarkup = await enqueue(() => renderToMarkup(source, true));
-            // 取 viewBox 尺寸并固定 width/height 属性，保证图片有确定的固有尺寸
-            const wrap = document.createElement("div");
-            wrap.innerHTML = pureMarkup;
-            const el = wrap.querySelector("svg");
-            if (!el) throw new Error("no svg in export render");
-            const vb = el.viewBox && el.viewBox.baseVal;
-            const w = (vb && vb.width) || el.clientWidth || 800;
-            const h = (vb && vb.height) || el.clientHeight || 600;
-            el.setAttribute("width", String(Math.round(w)));
-            el.setAttribute("height", String(Math.round(h)));
-            const markup = (() => {
-              try {
-                return new XMLSerializer().serializeToString(el);
-              } catch {
-                return el.outerHTML;
-              }
-            })();
-
-            const source2 = await loadSvgImage(markup);
-            const scale = 2;
-            const raster = document.createElement("canvas");
-            raster.width = Math.round(w * scale);
-            raster.height = Math.round(h * scale);
-            const ctx = raster.getContext("2d");
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, raster.width, raster.height);
-            ctx.drawImage(source2, 0, 0, raster.width, raster.height);
-            const png = await new Promise((resolve) => raster.toBlob(resolve, "image/png"));
-            if (!png) throw new Error("png encode failed");
+            prefetchExport(source, hash);
+            const png = await exportCache.get(hash);
             triggerDownload(png, `mermaid-${hash}.png`);
           } catch {
             svgFallback();
@@ -516,7 +535,11 @@ const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
             btnMore.addEventListener("click", (ev) => {
               ev.stopPropagation();
               if (root.__mmdrOpen) closeMenu(root);
-              else openMenu(root);
+              else {
+                // 打开菜单即预生成 PNG，点击下载时已就绪
+                prefetchExport(source, hash);
+                openMenu(root);
+              }
             });
 
             actions.appendChild(btnExpand);
