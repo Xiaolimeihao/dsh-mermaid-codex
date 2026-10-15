@@ -40,7 +40,7 @@ function djb2(str) {
 }
 
 // DOM 结构版本：升级 UI 后递增，让旧渲染结果强制重画，避免新旧界面残留叠加
-const UI_VERSION = "5";
+const UI_VERSION = "6";
 
 const ICON_EXPAND = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>`;
 const ICON_CLOSE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
@@ -90,6 +90,7 @@ window.__ModuleLoader__.load({
 
         const ICON_COPY = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
         const ICON_DOWNLOAD = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+const ICON_IMAGE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>`;
         const ICON_CODE = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>`;
 
         const iconButton = (title, icon) => {
@@ -317,16 +318,66 @@ window.__ModuleLoader__.load({
           }
         };
 
-        const downloadSvg = (svgMarkup, hash) => {
-          const blob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
+        // 导出用的干净 SVG：恢复自然尺寸（不受当前缩放影响）
+        const cleanSvgMarkup = (svgEl) => {
+          const clone = svgEl.cloneNode(true);
+          const vb = clone.viewBox && clone.viewBox.baseVal;
+          const w = vb && vb.width ? Math.round(vb.width) : 0;
+          clone.style.cssText = w
+            ? `width:${w}px;height:auto;display:block;`
+            : "display:block;height:auto;";
+          return clone.outerHTML;
+        };
+
+        const triggerDownload = (blob, filename) => {
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `mermaid-${hash}.svg`;
+          a.download = filename;
           document.body.appendChild(a);
           a.click();
           a.remove();
           window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+        };
+
+        const downloadSvg = (svgEl, hash) => {
+          const markup = cleanSvgMarkup(svgEl);
+          triggerDownload(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }), `mermaid-${hash}.svg`);
+        };
+
+        // PNG 导出：SVG → 离屏 canvas 2x 栅格化；失败回退 SVG 下载
+        const downloadPng = (svgEl, hash) => {
+          const markup = cleanSvgMarkup(svgEl);
+          const svgBlob = () => new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
+          const url = URL.createObjectURL(svgBlob());
+          const img = new Image();
+          img.onload = () => {
+            URL.revokeObjectURL(url);
+            try {
+              const vb = svgEl.viewBox && svgEl.viewBox.baseVal;
+              const w = (vb && vb.width) || svgEl.clientWidth || 800;
+              const h = (vb && vb.height) || svgEl.clientHeight || 600;
+              const scale = 2;
+              const raster = document.createElement("canvas");
+              raster.width = Math.round(w * scale);
+              raster.height = Math.round(h * scale);
+              const ctx = raster.getContext("2d");
+              ctx.fillStyle = "#ffffff";
+              ctx.fillRect(0, 0, raster.width, raster.height);
+              ctx.drawImage(img, 0, 0, raster.width, raster.height);
+              raster.toBlob((png) => {
+                if (png) triggerDownload(png, `mermaid-${hash}.png`);
+                else triggerDownload(svgBlob(), `mermaid-${hash}.svg`);
+              }, "image/png");
+            } catch {
+              triggerDownload(svgBlob(), `mermaid-${hash}.svg`);
+            }
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+            triggerDownload(svgBlob(), `mermaid-${hash}.svg`);
+          };
+          img.src = url;
         };
 
         const render = async (block, source, hash) => {
@@ -390,13 +441,21 @@ window.__ModuleLoader__.load({
               closeMenu(root);
               copySource(source);
             });
-            const itemDownload = menuItem("下载图像", ICON_DOWNLOAD);
+            const itemPng = menuItem("下载 PNG", ICON_IMAGE);
+            itemPng.addEventListener("click", () => {
+              closeMenu(root);
+              const el = canvas.querySelector("svg");
+              if (el) downloadPng(el, hash);
+            });
+            const itemDownload = menuItem("下载 SVG", ICON_DOWNLOAD);
             itemDownload.addEventListener("click", () => {
               closeMenu(root);
-              downloadSvg(canvas.querySelector("svg")?.outerHTML ?? svg, hash);
+              const el = canvas.querySelector("svg");
+              if (el) downloadSvg(el, hash);
             });
             const itemToggle = menuItem("显示源码", ICON_CODE);
             menu.appendChild(itemCopy);
+            menu.appendChild(itemPng);
             menu.appendChild(itemDownload);
             menu.appendChild(menuSeparator());
             menu.appendChild(itemToggle);
