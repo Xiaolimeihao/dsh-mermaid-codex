@@ -40,23 +40,6 @@ dsh plugin --profile <你的 profile> add link:<克隆路径>
 
 管理：侧边栏「插件」页可启用/停用；卸载 `dsh plugin --profile <profile> remove dsh-mermaid-codex`。
 
-## 与 dsh-mermaid-render 的区别
-
-社区已有 [dsh-mermaid-render](https://www.npmjs.com/package/dsh-mermaid-render)（by bsfeng），功能互补：
-
-| | dsh-mermaid-render | dsh-mermaid-codex（本插件） |
-| --- | --- | --- |
-| 自动渲染 / 预览代码切换 | ✅ | ✅ |
-| 全屏查看 | ❌（其已知限制） | ✅ 胶囊工具条 |
-| 滚轮缩放 / 拖拽平移 | ❌（其已知限制） | ✅ 光标锚点 |
-| 导出 | PNG + SVG | PNG + SVG（分辨率/背景可选） |
-| 复制为图片 | — | ✅ |
-| 深浅主题自适应 | ✅ | ✅ |
-| 提示词注入（引导模型画图） | ✅ | ❌ |
-| 引擎加载 | 按需加载 | 全量内联（离线即用） |
-
-两者可以按需选择，同时安装会有重复渲染，请只启用其一。
-
 ## 开发 / Development
 
 ```
