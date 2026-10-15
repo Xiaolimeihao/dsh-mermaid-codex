@@ -29,10 +29,10 @@ A DeepSeek Harness (DSH) web plugin that renders `mermaid` code blocks in the co
 
 ```bash
 # 从 GitHub 安装
-dsh plugin --profile <你的 profile> add github:<your-github-name>/dsh-mermaid-codex
+dsh plugin --profile <你的 profile> add github:Xiaolimeihao/dsh-mermaid-codex
 
 # 或克隆到本地后 link 安装
-git clone https://github.com/<your-github-name>/dsh-mermaid-codex.git
+git clone https://github.com/Xiaolimeihao/dsh-mermaid-codex.git
 dsh plugin --profile <你的 profile> add link:<克隆路径>
 ```
 
