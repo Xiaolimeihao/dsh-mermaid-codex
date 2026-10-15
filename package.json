@@ -1,0 +1,26 @@
+{
+  "name": "dsh-mermaid-codex",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH conversation plugin: renders mermaid code blocks as Codex-style diagram cards with fullscreen view and wheel zoom. DSH 会话 Mermaid 图表渲染插件：Codex 式交互，支持全屏与滚轮缩放。",
+  "license": "MIT",
+  "keywords": ["dsh", "mermaid", "diagram", "plugin", "flowchart"],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "README.md", "LICENSE"],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-conversation"]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mermaid Diagrams (Codex style)",
+    "description": "Renders mermaid code blocks as inline diagram cards with fullscreen view and wheel zoom."
+  }
+}

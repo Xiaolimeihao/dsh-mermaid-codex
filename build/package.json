@@ -1,0 +1,10 @@
+{
+  "name": "mermaid-render-build",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "esbuild": "^0.28.2",
+    "mermaid": "^12.2.0"
+  }
+}

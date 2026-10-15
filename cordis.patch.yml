@@ -1,0 +1,3 @@
+- insert:
+    - id: mermaid-codex-render
+      name: 'dsh-mermaid-codex'

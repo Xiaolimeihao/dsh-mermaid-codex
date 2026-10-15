@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mermaid 图表渲染（Codex 风格）",
+    "description": "将会话中的 mermaid 代码块渲染为内联图表卡片，支持全屏查看与滚轮缩放。"
+  }
+}
