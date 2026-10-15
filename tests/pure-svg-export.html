@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<svg id="src" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" width="200" height="120">
+  <rect x="10" y="10" width="180" height="100" fill="#dae8fc" stroke="#b7cdf2"/>
+  <text x="100" y="65" text-anchor="middle" fill="#1f4e9c">节点 A</text>
+</svg>
+<pre id="results">running...</pre>
+<script>
+const out = { results: {} };
+const log = (k, v) => {
+  out.results[k] = v;
+  document.getElementById("results").textContent = JSON.stringify(out, null, 1);
+  document.title = JSON.stringify(out.results);
+};
+function rasterize(drawSource) {
+  return new Promise((resolve) => {
+    try {
+      const c = document.createElement("canvas");
+      c.width = 400; c.height = 240;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(drawSource, 0, 0, c.width, c.height);
+      c.toBlob((blob) => {
+        if (!blob) { resolve({ ok: false, stage: "toBlob-null" }); return; }
+        try {
+          const d = ctx.getImageData(0, 0, c.width, c.height).data;
+          let nonWhite = 0;
+          for (let i = 0; i < d.length; i += 4) if (d[i] < 250 || d[i+1] < 250 || d[i+2] < 250) nonWhite++;
+          resolve({ ok: true, pngBytes: blob.size, nonWhitePixels: nonWhite });
+        } catch (e) {
+          resolve({ ok: false, stage: "tainted:" + e.name });
+        }
+      }, "image/png");
+    } catch (e) {
+      resolve({ ok: false, stage: "draw-threw:" + e.name + ":" + e.message });
+    }
+  });
+}
+function loadImg(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ ok: true, img });
+    img.onerror = () => resolve({ ok: false });
+    img.src = src;
+  });
+}
+(async () => {
+  const src = document.getElementById("src");
+  // 纯 SVG（无 foreignObject）+ XMLSerializer → blob 图片 → canvas
+  const markup = new XMLSerializer().serializeToString(src);
+  const url = URL.createObjectURL(new Blob([markup], { type: "image/svg+xml;charset=utf-8" }));
+  const r = await loadImg(url);
+  if (r.ok) log("pureSvgBlob", await rasterize(r.img));
+  else log("pureSvgBlob", { ok: false, stage: "img-load-failed" });
+  URL.revokeObjectURL(url);
+
+  // data URL 版对照
+  const url2 = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(markup);
+  const r2 = await loadImg(url2);
+  if (r2.ok) log("pureSvgData", await rasterize(r2.img));
+  else log("pureSvgData", { ok: false, stage: "img-load-failed" });
+  log("done", true);
+})();
+</script>
+</body>
+</html>

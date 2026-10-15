@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- 可选 CSP 变体由 ?csp=1 控制 -->
+<script>
+if (location.search.indexOf("csp=1") >= 0) {
+  const m = document.createElement("meta");
+  m.httpEquiv = "Content-Security-Policy";
+  m.content = "img-src 'self'; style-src-elem 'self'";
+  document.head.appendChild(m);
+}
+</script>
+</head>
+<body>
+<svg id="src" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120" width="200" height="120">
+  <rect x="10" y="10" width="180" height="100" fill="#dae8fc" stroke="#b7cdf2"/>
+  <text x="100" y="65" text-anchor="middle" fill="#1f4e9c">节点 A</text>
+  <foreignObject x="20" y="70" width="160" height="40">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="font:12px sans-serif;color:#1f4e9c">
+      标签&nbsp;换行<br>第二行
+    </div>
+  </foreignObject>
+</svg>
+<pre id="results">running...</pre>
+<script>
+const out = { csp: location.search.indexOf("csp=1") >= 0, results: {} };
+const log = (k, v) => {
+  out.results[k] = v;
+  document.getElementById("results").textContent = JSON.stringify(out, null, 1);
+  document.title = JSON.stringify(out.results);
+};
+const srcSvg = document.getElementById("src");
+
+function makeClone() {
+  const clone = srcSvg.cloneNode(true);
+  clone.setAttribute("width", "200");
+  clone.setAttribute("height", "120");
+  clone.style.cssText = "position:fixed;left:0;top:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(clone);
+  return clone;
+}
+
+function rasterize(drawSource, label) {
+  return new Promise((resolve) => {
+    try {
+      const c = document.createElement("canvas");
+      c.width = 400; c.height = 240;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(drawSource, 0, 0, c.width, c.height);
+      c.toBlob((blob) => {
+        if (!blob) { resolve({ ok: false, stage: "toBlob-null" }); return; }
+        try {
+          const d = ctx.getImageData(0, 0, c.width, c.height).data; // 抛错=canvas被污染
+          let nonWhite = 0;
+          for (let i = 0; i < d.length; i += 4) if (d[i] < 250 || d[i+1] < 250 || d[i+2] < 250) nonWhite++;
+          resolve({ ok: true, pngBytes: blob.size, nonWhitePixels: nonWhite });
+        } catch (e) {
+          resolve({ ok: false, stage: "tainted:" + e.name });
+        }
+      }, "image/png");
+    } catch (e) {
+      resolve({ ok: false, stage: "draw-threw:" + e.name + ":" + e.message });
+    }
+  });
+}
+
+function loadImg(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ ok: true, img });
+    img.onerror = (e) => resolve({ ok: false, err: "load-error" });
+    img.src = src;
+  });
+}
+
+(async () => {
+  // A) SVGImageElement 直绘（clone 入 DOM，无 Image 加载，不走 img-src CSP）
+  const cloneA = makeClone();
+  log("A_svgElementDraw", await rasterize(cloneA, "A"));
+  cloneA.remove();
+
+  // 先序列化：HTML outerHTML vs XMLSerializer
+  const cloneS = makeClone();
+  const htmlSer = cloneS.outerHTML;
+  const xmlSer = new XMLSerializer().serializeToString(cloneS);
+  cloneS.remove();
+  log("serialize", {
+    htmlHasNbsp: htmlSer.indexOf("&nbsp;") >= 0,
+    htmlHasBrTag: /<br>/.test(htmlSer),
+    xmlHasNbsp: xmlSer.indexOf("&nbsp;") >= 0,
+    xmlHasBrTag: /<br\s*\/?>/.test(xmlSer) && /<br\s*>/.test(xmlSer),
+    xmlWellFormed: null,
+  });
+
+  // B) Image + blob URL
+  const blobUrl = URL.createObjectURL(new Blob([xmlSer], { type: "image/svg+xml;charset=utf-8" }));
+  const rb = await loadImg(blobUrl);
+  if (rb.ok) log("B_imgBlob", await rasterize(rb.img, "B"));
+  else log("B_imgBlob", { ok: false, stage: "img-load-failed(blob:)" });
+  URL.revokeObjectURL(blobUrl);
+
+  // C) Image + data URL
+  const dataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xmlSer);
+  const rc = await loadImg(dataUrl);
+  if (rc.ok) log("C_imgData", await rasterize(rc.img, "C"));
+  else log("C_imgData", { ok: false, stage: "img-load-failed(data:)" });
+
+  // D) createImageBitmap
+  try {
+    const bmp = await createImageBitmap(new Blob([xmlSer], { type: "image/svg+xml;charset=utf-8" }));
+    log("D_bitmap", await rasterize(bmp, "D"));
+    bmp.close && bmp.close();
+  } catch (e) {
+    log("D_bitmap", { ok: false, stage: "bitmap-rejected:" + e.name + ":" + e.message });
+  }
+
+  // E) HTML outerHTML 版本走 Image+blob（对比 XMLSerializer 是否是关键）
+  const blobUrl2 = URL.createObjectURL(new Blob([htmlSer], { type: "image/svg+xml;charset=utf-8" }));
+  const re = await loadImg(blobUrl2);
+  if (re.ok) log("E_imgBlobHtmlSer", await rasterize(re.img, "E"));
+  else log("E_imgBlobHtmlSer", { ok: false, stage: "img-load-failed(htmlSer)" });
+  URL.revokeObjectURL(blobUrl2);
+
+  log("done", true);
+})();
+</script>
+</body>
+</html>
